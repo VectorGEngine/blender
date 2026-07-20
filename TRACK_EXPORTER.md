@@ -4,8 +4,10 @@ The track exporter creates a ZIP containing:
 
 ```text
 <track_id>.glb
-config.json
+manifest.json
 hdr/env.hdr or hdr/env.exr
+maps/<layout_id>.svg
+routes/<layout_id>.json
 ```
 
 Install or enable `blender/addons/vectorg_track_exporter` the same way as the
@@ -19,13 +21,25 @@ loaded in the Blender file. Packed image textures are supported.
 1. Select **Create Track Structure**.
 2. Set the track ID and name.
 3. Add one or more layouts.
-4. Move visual objects under the generated visual roots.
-5. Parent driving collision meshes under the appropriate generated surface.
-6. Parent walls, barriers, fences, and props under `OBSTACLES`.
-7. Add spawn points, one start/finish volume, and ordered checkpoints.
-8. Position and rotate the generated objects in the viewport. Local `-Y` is
+4. Draw or assign an optional Bezier or Poly map curve for each layout.
+5. Move visual objects under the generated visual roots.
+6. Parent driving collision meshes under the appropriate generated surface.
+7. Parent walls, barriers, fences, and props under `OBSTACLES`.
+8. Add spawn points, one start/finish volume, and ordered checkpoints.
+9. Position and rotate the generated objects in the viewport. Local `-Y` is
    the forward crossing direction.
-9. Select **Validate Track**, then **Export Track Zip**.
+10. Select **Validate Track**, then **Export Track Zip**.
+
+Picking a layout map curve moves it under the generated `<layout_id>_MAP` node
+while preserving its world transform. The exporter calculates layout length from
+that curve, projects it onto world XY for `maps/<layout_id>.svg`, and adaptively
+samples its full 3D shape for `routes/<layout_id>.json`. Route samples have a
+maximum spacing of 5 metres and become denser around corners and elevation
+changes. SVG maps automatically rotate their principal axis horizontally unless
+the layout is nearly square. Draw the curve in driving direction. Circular layouts require one cyclic
+spline; point-to-point layouts require one open spline. MAP hierarchies are
+excluded from the GLB. Layouts without a map curve remain valid and use the
+game's placeholder map and spawn-point reset fallback.
 
 Changing a layout's **ID** renames its generated hierarchy nodes, addon-created
 spawn points, route events, and layout box colliders. Use the refresh icon next

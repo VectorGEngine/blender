@@ -4,11 +4,12 @@ bl_info = {
     "version": (0, 1, 0),
     "blender": (3, 6, 0),
     "location": "View3D > Sidebar > VectorG",
-    "description": "Create and export VectorG track packages as <track_id>.glb + config.json zip",
+    "description": "Create and export VectorG track packages as <track_id>.glb + manifest.json zip",
     "category": "Import-Export",
 }
 
 import json
+import math
 import re
 import shutil
 import tempfile
@@ -16,6 +17,7 @@ import zipfile
 from pathlib import Path
 
 import bpy
+from bpy.app.handlers import persistent
 from bpy_extras.io_utils import ExportHelper
 from mathutils import Matrix, Vector
 from bpy.props import (
@@ -44,6 +46,7 @@ ROLE_COLLISIONS = "collisions"
 ROLE_OBSTACLES = "obstacles"
 ROLE_SPAWN_POINTS = "spawn_points"
 ROLE_EVENTS = "events"
+ROLE_MAP = "map"
 ROLE_SPAWN_POINT = "spawn_point"
 ROLE_SURFACE = "surface"
 
@@ -51,6 +54,10 @@ ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 DEFAULT_EVENT_SCALE = (5.0, 1.0, 2.0)
 DEFAULT_DYNAMIC_MASS = 10.0
 DYNAMIC_COLLIDER_DENSITY = 10.0
+ROUTE_MAX_SPACING = 5.0
+ROUTE_MAX_ANGLE_DEGREES = 5.0
+ROUTE_MAX_CURVE_ERROR = 0.05
+MAP_ALIGNMENT_MIN_AXIS_RATIO = 1.1
 SURFACE_IDS = (
     "tarmac",
     "concrete",
@@ -85,6 +92,10 @@ def image_source_extension(image):
 
 def hdr_image_poll(_settings, image):
     return image.source == "FILE" and image_source_extension(image) in {".hdr", ".exr"}
+
+
+def curve_object_poll(_settings, obj):
+    return obj.type == "CURVE"
 
 
 def is_in_tree(root, obj):
@@ -262,6 +273,7 @@ def sync_layout_node_names(layout):
         ROLE_COLLISIONS: f"{layout_id}_COLLISIONS",
         ROLE_SPAWN_POINTS: f"{layout_id}_SPAWN_POINTS",
         ROLE_EVENTS: f"{layout_id}_EVENTS",
+        ROLE_MAP: f"{layout_id}_MAP",
     }
     for child in root.children:
         generated_name = role_names.get(child.get(ROLE_PROPERTY))
@@ -290,6 +302,8 @@ def sync_layout_node_names(layout):
         name_map[obj] = f"{layout_id}_static_box_{index:02d}"
     for index, obj in enumerate(ordered_objects(named["dynamic_boxes"], "dynamic_box"), start=1):
         name_map[obj] = f"{layout_id}_dynamic_box_{index:02d}"
+    if layout.map_curve:
+        name_map[layout.map_curve] = f"{layout_id}_map_curve"
 
     for obj in [root, *descendants(root)]:
         obj.pop("vectorg_generated_kind", None)
@@ -307,6 +321,41 @@ def update_layout_id(layout, _context):
     sync_layout_node_names(layout)
 
 
+def update_map_curve(layout, context):
+    curve = layout.map_curve
+    if not curve or not layout.root_object:
+        return
+    settings = scene_settings(context)
+    for other_layout in settings.layouts:
+        if other_layout.as_pointer() != layout.as_pointer() and other_layout.map_curve == curve:
+            other_layout.map_curve = None
+    map_root = direct_child_with_role(layout.root_object, ROLE_MAP)
+    if not map_root:
+        map_root = create_empty(context, f"{layout.layout_id}_MAP", layout.root_object, ROLE_MAP)
+    world_matrix = curve.matrix_world.copy()
+    curve.parent = map_root
+    curve.matrix_world = world_matrix
+    sync_layout_node_names(layout)
+    update_layout_length(layout)
+    select_only(context, curve)
+
+
+@persistent
+def update_curve_lengths(_scene, depsgraph):
+    updated_ids = set()
+    for update in depsgraph.updates:
+        updated_ids.add(update.id)
+        updated_ids.add(getattr(update.id, "original", update.id))
+    for scene in bpy.data.scenes:
+        settings = getattr(scene, "track_exporter", None)
+        if not settings or not settings.is_configured:
+            continue
+        for layout in settings.layouts:
+            curve = layout.map_curve
+            if curve and (curve in updated_ids or curve.data in updated_ids):
+                update_layout_length(layout)
+
+
 def update_layout_visibility(layout, _context):
     if layout.root_object:
         hidden = not layout.visible
@@ -322,7 +371,8 @@ def create_layout_hierarchy(context, track_root, layout_id):
     collisions = create_collision_hierarchy(context, root, layout_id)
     spawn_points = create_empty(context, f"{layout_id}_SPAWN_POINTS", root, ROLE_SPAWN_POINTS)
     events = create_empty(context, f"{layout_id}_EVENTS", root, ROLE_EVENTS)
-    return root, visuals, collisions, spawn_points, events
+    map_root = create_empty(context, f"{layout_id}_MAP", root, ROLE_MAP)
+    return root, visuals, collisions, spawn_points, events, map_root
 
 
 def layout_generated_node_names(layout_id):
@@ -332,6 +382,7 @@ def layout_generated_node_names(layout_id):
         f"{layout_id}_COLLISIONS",
         f"{layout_id}_SPAWN_POINTS",
         f"{layout_id}_EVENTS",
+        f"{layout_id}_MAP",
         f"{layout_id}_OBSTACLES",
     }
     names.update(f"{layout_id}_COLLISIONS_{surface_id}" for surface_id in SURFACE_IDS)
@@ -502,13 +553,119 @@ def layout_event_config(layout):
     return result
 
 
-def build_config(settings):
+def split_bezier(points):
+    p0, p1, p2, p3 = points
+    p01 = (p0 + p1) * 0.5
+    p12 = (p1 + p2) * 0.5
+    p23 = (p2 + p3) * 0.5
+    p012 = (p01 + p12) * 0.5
+    p123 = (p12 + p23) * 0.5
+    midpoint = (p012 + p123) * 0.5
+    return (p0, p01, p012, midpoint), (midpoint, p123, p23, p3)
+
+
+def bezier_needs_subdivision(points):
+    p0, p1, p2, p3 = points
+    chord = (p3 - p0).length
+    control_length = (p1 - p0).length + (p2 - p1).length + (p3 - p2).length
+    start_tangent = p1 - p0
+    end_tangent = p3 - p2
+    tangent_angle = 0.0
+    if start_tangent.length_squared > 1e-12 and end_tangent.length_squared > 1e-12:
+        tangent_angle = start_tangent.angle(end_tangent)
+    return (
+        chord > ROUTE_MAX_SPACING
+        or control_length - chord > ROUTE_MAX_CURVE_ERROR
+        or tangent_angle > math.radians(ROUTE_MAX_ANGLE_DEGREES)
+    )
+
+
+def sample_bezier_segment(points, depth=0):
+    if depth >= 18 or not bezier_needs_subdivision(points):
+        return [points[0], points[3]]
+    left, right = split_bezier(points)
+    left_points = sample_bezier_segment(left, depth + 1)
+    right_points = sample_bezier_segment(right, depth + 1)
+    return left_points[:-1] + right_points
+
+
+def subdivide_line(start, end):
+    distance = (end - start).length
+    segments = max(1, int(math.ceil(distance / ROUTE_MAX_SPACING)))
+    return [start.lerp(end, index / segments) for index in range(segments + 1)]
+
+
+def adaptive_route_points(curve_object):
+    if not curve_object or len(curve_object.data.splines) != 1:
+        return [], False
+    spline = curve_object.data.splines[0]
+    matrix = curve_object.matrix_world
+    route = []
+
+    if spline.type == "BEZIER":
+        points = list(spline.bezier_points)
+        segment_count = len(points) if spline.use_cyclic_u else len(points) - 1
+        for index in range(max(0, segment_count)):
+            next_index = (index + 1) % len(points)
+            segment = tuple(matrix @ value for value in (
+                points[index].co,
+                points[index].handle_right,
+                points[next_index].handle_left,
+                points[next_index].co,
+            ))
+            sampled = sample_bezier_segment(segment)
+            route.extend(sampled if not route else sampled[1:])
+    elif spline.type == "POLY":
+        points = [matrix @ Vector(point.co[:3]) for point in spline.points]
+        segment_count = len(points) if spline.use_cyclic_u else len(points) - 1
+        for index in range(max(0, segment_count)):
+            sampled = subdivide_line(points[index], points[(index + 1) % len(points)])
+            route.extend(sampled if not route else sampled[1:])
+
+    closed = bool(spline.use_cyclic_u)
+    if closed and len(route) > 1 and (route[-1] - route[0]).length < 1e-5:
+        route.pop()
+    return route, closed
+
+
+def route_length(points, closed):
+    if len(points) < 2:
+        return 0.0
+    length = sum((points[index] - points[index - 1]).length for index in range(1, len(points)))
+    if closed:
+        length += (points[0] - points[-1]).length
+    return length
+
+
+def update_layout_length(layout):
+    points, closed = adaptive_route_points(layout.map_curve)
+    if len(points) >= 2:
+        layout.length = route_length(points, closed) / 1000.0
+    return points, closed
+
+
+def layout_route_data(layout):
+    points, closed = update_layout_length(layout)
+    return {
+        "version": 1,
+        "closed": closed,
+        "maxSpacing": ROUTE_MAX_SPACING,
+        "points": [
+            [round(point.x, 6), round(point.z, 6), round(-point.y, 6)]
+            for point in points
+        ],
+    }
+
+
+def build_manifest(settings):
     shared_collisions = object_with_role(settings.shared_root_object, ROLE_COLLISIONS)
     shared_obstacles = object_with_role(shared_collisions, ROLE_OBSTACLES)
     shared_visuals = object_with_role(settings.shared_root_object, ROLE_VISUALS)
     layouts = []
 
     for layout in settings.layouts:
+        if layout.map_curve:
+            update_layout_length(layout)
         nodes = layout_nodes(layout)
         track_types = [
             value for value, enabled in (
@@ -516,7 +673,7 @@ def build_config(settings):
                 ("offroad", layout.track_type_offroad),
             ) if enabled
         ]
-        layouts.append({
+        layout_config = {
             "id": layout.layout_id,
             "name": layout.display_name,
             "description": layout.description,
@@ -531,7 +688,11 @@ def build_config(settings):
             "hotLap": {
                 "events": layout_event_config(layout),
             },
-        })
+        }
+        if layout.map_curve:
+            layout_config["map"] = f"maps/{layout.layout_id}.svg"
+            layout_config["route"] = f"routes/{layout.layout_id}.json"
+        layouts.append(layout_config)
 
     config = {
         "version": 1,
@@ -550,6 +711,144 @@ def build_config(settings):
     if settings.hdr_image:
         config["hdr"] = "hdr/env" + image_source_extension(settings.hdr_image)
     return config
+
+
+def curve_svg_commands(curve_object):
+    """Convert supported curve splines to SVG commands in projected world XY coordinates."""
+    matrix = curve_object.matrix_world
+    paths = []
+    coordinates = []
+
+    def projected(point):
+        world = matrix @ Vector(point[:3])
+        result = (float(world.x), float(world.y))
+        coordinates.append(result)
+        return result
+
+    for spline in curve_object.data.splines:
+        commands = []
+        if spline.type == "BEZIER":
+            points = list(spline.bezier_points)
+            if len(points) < 2:
+                continue
+            projected_points = [projected(point.co) for point in points]
+            right_handles = [projected(point.handle_right) for point in points]
+            left_handles = [projected(point.handle_left) for point in points]
+            commands.append(("M", projected_points[0]))
+            segment_count = len(points) if spline.use_cyclic_u else len(points) - 1
+            for index in range(segment_count):
+                next_index = (index + 1) % len(points)
+                commands.append((
+                    "C",
+                    right_handles[index],
+                    left_handles[next_index],
+                    projected_points[next_index],
+                ))
+            if spline.use_cyclic_u:
+                commands.append(("Z",))
+        elif spline.type == "POLY":
+            points = [projected(point.co) for point in spline.points]
+            if len(points) < 2:
+                continue
+            commands.append(("M", points[0]))
+            commands.extend(("L", point) for point in points[1:])
+            if spline.use_cyclic_u:
+                commands.append(("Z",))
+        if commands:
+            paths.append(commands)
+    return paths, coordinates
+
+
+def write_layout_map_svg(layout, filepath):
+    paths, coordinates = curve_svg_commands(layout.map_curve)
+    if not paths or not coordinates:
+        raise RuntimeError(f"{layout.display_name or layout.layout_id} map curve has no exportable splines")
+
+    route_points, route_closed = adaptive_route_points(layout.map_curve)
+    alignment_samples = []
+    segment_count = len(route_points) if route_closed else len(route_points) - 1
+    for index in range(max(0, segment_count)):
+        start = route_points[index]
+        end = route_points[(index + 1) % len(route_points)]
+        weight = (end - start).length
+        if weight > 1e-9:
+            alignment_samples.append((((start.x + end.x) * 0.5, (start.y + end.y) * 0.5), weight))
+    if not alignment_samples:
+        alignment_samples = [(point, 1.0) for point in coordinates]
+    total_weight = sum(weight for _point, weight in alignment_samples)
+    center_x = sum(point[0] * weight for point, weight in alignment_samples) / total_weight
+    center_y = sum(point[1] * weight for point, weight in alignment_samples) / total_weight
+    covariance_xx = sum(
+        (point[0] - center_x) ** 2 * weight for point, weight in alignment_samples
+    ) / total_weight
+    covariance_yy = sum(
+        (point[1] - center_y) ** 2 * weight for point, weight in alignment_samples
+    ) / total_weight
+    covariance_xy = sum(
+        (point[0] - center_x) * (point[1] - center_y) * weight
+        for point, weight in alignment_samples
+    ) / total_weight
+    discriminant = math.sqrt(
+        max(0.0, (covariance_xx - covariance_yy) ** 2 + 4.0 * covariance_xy ** 2)
+    )
+    major_variance = (covariance_xx + covariance_yy + discriminant) * 0.5
+    minor_variance = max(0.0, (covariance_xx + covariance_yy - discriminant) * 0.5)
+    axis_ratio = math.sqrt(major_variance / max(minor_variance, 1e-12))
+    alignment_angle = 0.0
+    if axis_ratio >= MAP_ALIGNMENT_MIN_AXIS_RATIO:
+        alignment_angle = 0.5 * math.atan2(
+            2.0 * covariance_xy,
+            covariance_xx - covariance_yy,
+        )
+
+    cos_angle = math.cos(alignment_angle)
+    sin_angle = math.sin(alignment_angle)
+
+    def aligned(point):
+        offset_x = point[0] - center_x
+        offset_y = point[1] - center_y
+        return (
+            offset_x * cos_angle + offset_y * sin_angle,
+            -offset_x * sin_angle + offset_y * cos_angle,
+        )
+
+    aligned_coordinates = [aligned(point) for point in coordinates]
+    min_x = min(point[0] for point in aligned_coordinates)
+    max_x = max(point[0] for point in aligned_coordinates)
+    min_y = min(point[1] for point in aligned_coordinates)
+    max_y = max(point[1] for point in aligned_coordinates)
+    span_x = max_x - min_x
+    span_y = max_y - min_y
+    scale = 1000.0 / max(span_x, span_y, 0.001)
+    padding = 50.0
+    width = span_x * scale + padding * 2.0
+    height = span_y * scale + padding * 2.0
+
+    def svg_point(point):
+        aligned_x, aligned_y = aligned(point)
+        x = (aligned_x - min_x) * scale + padding
+        y = (max_y - aligned_y) * scale + padding
+        return f"{x:.3f} {y:.3f}"
+
+    path_elements = []
+    for commands in paths:
+        parts = []
+        for command in commands:
+            if command[0] == "Z":
+                parts.append("Z")
+            else:
+                parts.append(f"{command[0]} {' '.join(svg_point(point) for point in command[1:])}")
+        path_elements.append(f'  <path d="{" ".join(parts)}"/>')
+
+    svg = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width:.3f} {height:.3f}" '
+        'fill="none" preserveAspectRatio="xMidYMid meet">\n'
+        '  <g stroke="#ffffff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">\n'
+        + "\n".join(path_elements)
+        + '\n  </g>\n</svg>\n'
+    )
+    filepath.write_text(svg, encoding="utf-8")
 
 
 def validate_collision_root(errors, warnings, label, collision_root):
@@ -716,6 +1015,7 @@ def validate_scene(settings):
 
     layout_ids = set()
     layout_roots = set()
+    layout_map_curves = set()
     for index, layout in enumerate(settings.layouts, start=1):
         layout_name = layout.display_name.strip() or layout.layout_id or f"Layout {index}"
         label = f"{layout_name} layout"
@@ -734,6 +1034,41 @@ def validate_scene(settings):
         layout_roots.add(layout.root_object)
         if not is_in_tree(track_root, layout.root_object):
             errors.append(f"{label} root must be inside the track hierarchy")
+
+        map_root = direct_child_with_role(layout.root_object, ROLE_MAP)
+        if not map_root:
+            errors.append(f"{label} is missing its MAP node")
+        if not layout.map_curve:
+            warnings.append(f"{label} has no map curve")
+        else:
+            if layout.map_curve in layout_map_curves:
+                errors.append(f"{label} shares its map curve with another layout")
+            layout_map_curves.add(layout.map_curve)
+            splines = list(layout.map_curve.data.splines)
+            supported_splines = [spline for spline in splines if spline.type in {"BEZIER", "POLY"}]
+            if not splines:
+                errors.append(f"{label} map curve has no splines")
+            elif len(splines) != 1:
+                errors.append(f"{label} map curve must contain exactly one spline")
+            elif len(supported_splines) != len(splines):
+                errors.append(f"{label} map curve may only contain Bezier or Poly splines")
+            elif any(
+                len(spline.bezier_points if spline.type == "BEZIER" else spline.points) < 2
+                for spline in supported_splines
+            ):
+                errors.append(f"{label} map curve splines need at least two points")
+            if layout.route_type == "circular" and supported_splines and not any(
+                spline.use_cyclic_u for spline in supported_splines
+            ):
+                errors.append(f"{label} map curve needs a cyclic spline for a circular route")
+            if layout.route_type == "point_to_point" and supported_splines and any(
+                spline.use_cyclic_u for spline in supported_splines
+            ):
+                errors.append(f"{label} map curve must be open for a point-to-point route")
+            if map_root and layout.map_curve.parent != map_root:
+                errors.append(f"{label} map curve must be directly under its MAP node")
+            if len(splines) == 1 and len(supported_splines) == 1:
+                update_layout_length(layout)
 
         nodes = layout_nodes(layout)
         for node_label, role in (
@@ -854,10 +1189,17 @@ class TrackLayoutSettings(PropertyGroup):
         ),
         default="circular",
     )
-    length: FloatProperty(name="Length (km)", description="Layout length shown to players", default=1.0, min=0.0)
+    length: FloatProperty(name="Length (km)", description="Calculated from the configured map curve", default=0.0, min=0.0)
     track_type_tarmac: BoolProperty(name="Tarmac", description="Classify this layout as tarmac", default=True)
     track_type_offroad: BoolProperty(name="Offroad", description="Classify this layout as off-road", default=False)
     root_object: PointerProperty(name="Root", description="Generated root object for this layout", type=bpy.types.Object)
+    map_curve: PointerProperty(
+        name="Map Curve",
+        description="Curve moved under the layout MAP node and used for its SVG, length, and reset route",
+        type=bpy.types.Object,
+        poll=curve_object_poll,
+        update=update_map_curve,
+    )
 
 
 class DynamicColliderLink(PropertyGroup):
@@ -941,7 +1283,7 @@ class TRACK_EXPORTER_OT_add_layout(Operator):
             layouts_root = create_empty(context, "LAYOUTS", settings.track_root_object, ROLE_LAYOUTS)
         layout_id = next_layout_id(settings)
         index = int(layout_id.removeprefix("layout_"))
-        root, _visuals, _collisions, _spawns, _events = create_layout_hierarchy(
+        root, _visuals, _collisions, _spawns, _events, _map = create_layout_hierarchy(
             context, layouts_root, layout_id
         )
 
@@ -1215,10 +1557,14 @@ class TRACK_EXPORTER_OT_validate_track(Operator):
         return {"CANCELLED"} if errors else {"FINISHED"}
 
 
-def export_track_glb(context, track_root, filepath):
+def export_track_glb(context, track_root, filepath, excluded_objects=()):
     selected_before = list(context.selected_objects)
     active_before = context.view_layer.objects.active
-    export_objects = [track_root, *descendants(track_root)]
+    excluded_objects = set(excluded_objects)
+    export_objects = [
+        obj for obj in [track_root, *descendants(track_root)]
+        if obj not in excluded_objects
+    ]
     visibility_before = [
         (obj, obj.hide_get(), obj.hide_render)
         for obj in export_objects
@@ -1256,7 +1602,7 @@ def export_track_glb(context, track_root, filepath):
 class TRACK_EXPORTER_OT_export_track_zip(Operator, ExportHelper):
     bl_idname = "track_exporter.export_track_zip"
     bl_label = "Export Track Zip"
-    bl_description = "Export <track_id>.glb, config.json, and the optional HDR into a track zip"
+    bl_description = "Export <track_id>.glb, manifest.json, and the optional HDR into a track zip"
     bl_options = {"REGISTER"}
     filename_ext = ".zip"
 
@@ -1281,9 +1627,38 @@ class TRACK_EXPORTER_OT_export_track_zip(Operator, ExportHelper):
         with tempfile.TemporaryDirectory(prefix="track_exporter_") as temp_dir:
             temp_path = Path(temp_dir)
             model_filename = f"{settings.track_id}.glb"
-            export_track_glb(context, settings.track_root_object, temp_path / model_filename)
-            config = build_config(settings)
-            (temp_path / "config.json").write_text(json.dumps(config, indent=4), encoding="utf-8")
+            map_roots = [
+                direct_child_with_role(layout.root_object, ROLE_MAP)
+                for layout in settings.layouts
+                if layout.root_object
+            ]
+            map_roots = [root for root in map_roots if root]
+            excluded_map_objects = {
+                obj for root in map_roots for obj in [root, *descendants(root)]
+            }
+            export_track_glb(
+                context,
+                settings.track_root_object,
+                temp_path / model_filename,
+                excluded_objects=excluded_map_objects,
+            )
+            manifest = build_manifest(settings)
+            (temp_path / "manifest.json").write_text(json.dumps(manifest, indent=4), encoding="utf-8")
+
+            map_curves = [layout.map_curve for layout in settings.layouts if layout.map_curve]
+            if map_curves:
+                maps_path = temp_path / "maps"
+                maps_path.mkdir()
+                routes_path = temp_path / "routes"
+                routes_path.mkdir()
+                for layout in settings.layouts:
+                    if layout.map_curve:
+                        write_layout_map_svg(layout, maps_path / f"{layout.layout_id}.svg")
+                        route_data = layout_route_data(layout)
+                        (routes_path / f"{layout.layout_id}.json").write_text(
+                            json.dumps(route_data, separators=(",", ":")),
+                            encoding="utf-8",
+                        )
 
             if settings.hdr_image:
                 source = image_source_path(settings.hdr_image)
@@ -1373,13 +1748,15 @@ class TRACK_EXPORTER_PT_track_export(Panel):
             id_value = id_split.row(align=True)
             id_value.prop(current, "layout_id", text="")
             id_value.operator("track_exporter.refresh_layout_names", text="", icon="FILE_REFRESH")
-            draw_split_prop(box, current, "visible")
             draw_split_prop(box, current, "display_name")
             draw_split_prop(box, current, "description")
             draw_split_prop(box, current, "discipline")
             draw_split_prop(box, current, "route_type")
-            draw_split_prop(box, current, "length")
+            length_row = box.row()
+            length_row.enabled = False
+            draw_split_prop(length_row, current, "length")
             draw_split_prop(box, current, "root_object")
+            draw_split_prop(box, current, "map_curve")
             tags = box.row(align=True)
             tags.label(text="Track Types")
             tags.prop(current, "track_type_tarmac", text="Tarmac", toggle=True)
@@ -1447,9 +1824,13 @@ def register():
     for cls in classes:
         bpy.utils.register_class(cls)
     bpy.types.Scene.track_exporter = PointerProperty(type=TrackExporterSettings)
+    if update_curve_lengths not in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.append(update_curve_lengths)
 
 
 def unregister():
+    if update_curve_lengths in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.remove(update_curve_lengths)
     del bpy.types.Scene.track_exporter
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)

@@ -4,7 +4,7 @@ bl_info = {
     "version": (0, 1, 0),
     "blender": (3, 6, 0),
     "location": "View3D > Sidebar > VectorG",
-    "description": "Export VectorG vehicle packages as <car_id>.glb + config.json + audio zip",
+    "description": "Export VectorG vehicle packages as <car_id>.glb + manifest.json + audio zip",
     "category": "Import-Export",
 }
 
@@ -918,7 +918,7 @@ def apply_imported_torque_curve(settings, torque_curve):
     mapping.update()
 
 
-def build_config(settings):
+def build_manifest(settings):
     sounds = {}
     if settings.use_custom_sounds:
         for slot, meta in SOUND_SLOTS.items():
@@ -1310,8 +1310,8 @@ class CAR_EXPORTER_OT_export_car_zip(Operator, ExportHelper):
                 export_cameras=True,
             ))
 
-            config = build_config(settings)
-            (temp_path / "config.json").write_text(json.dumps(config, indent=4), encoding="utf-8")
+            manifest = build_manifest(settings)
+            (temp_path / "manifest.json").write_text(json.dumps(manifest, indent=4), encoding="utf-8")
 
             copied = set()
             if settings.use_custom_sounds:
@@ -1342,12 +1342,12 @@ class CAR_EXPORTER_OT_export_car_zip(Operator, ExportHelper):
         return {"RUNNING_MODAL"}
 
 
-class CAR_EXPORTER_OT_import_config(Operator):
-    bl_idname = "car_exporter.import_car_config"
-    bl_label = "Import Car Config"
+class CAR_EXPORTER_OT_import_manifest(Operator):
+    bl_idname = "car_exporter.import_car_manifest"
+    bl_label = "Import Car Manifest"
     bl_options = {"REGISTER"}
 
-    filepath: StringProperty(name="Config JSON", subtype="FILE_PATH")
+    filepath: StringProperty(name="Manifest JSON", subtype="FILE_PATH")
 
     def execute(self, context):
         settings = scene_settings(context)
@@ -1648,7 +1648,7 @@ class CAR_EXPORTER_PT_car_export(Panel):
         box = layout.box()
         row = box.row()
         row.operator("car_exporter.validate_car", icon="CHECKMARK")
-        row.operator("car_exporter.import_car_config", icon="IMPORT")
+        row.operator("car_exporter.import_car_manifest", icon="IMPORT")
         box.operator("car_exporter.export_car_zip", icon="EXPORT")
 
 
@@ -1664,7 +1664,7 @@ classes = (
     CAR_EXPORTER_OT_create_configuration,
     CAR_EXPORTER_OT_remove_configuration,
     CAR_EXPORTER_OT_export_car_zip,
-    CAR_EXPORTER_OT_import_config,
+    CAR_EXPORTER_OT_import_manifest,
     CAR_EXPORTER_PT_car_export,
 )
 

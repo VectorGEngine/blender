@@ -13,7 +13,7 @@ The addon exports a zip with:
 
 ```text
 <car_id>.glb
-config.json
+manifest.json
 sounds/
 ```
 
@@ -21,11 +21,11 @@ The package matches the game loader convention:
 
 ```text
 src/files/models/vehicles/<car_id>/<car_id>.glb
-src/files/models/vehicles/<car_id>/config.json
+src/files/models/vehicles/<car_id>/manifest.json
 src/files/models/vehicles/<car_id>/sounds/
 ```
 
-`config.json` identifies the exported model explicitly:
+`manifest.json` identifies the exported model explicitly:
 
 ```json
 {
@@ -68,7 +68,7 @@ Then use Blender's `Install from Disk` action and select
 
 ## Required Scene Objects
 
-Default object names are based on `src/files/models/vehicles/byakko_gtr/config.json`:
+Default object names are based on `src/files/models/vehicles/byakko_gtr/manifest.json`:
 
 ```text
 body
@@ -129,7 +129,7 @@ Turbo Flutter
 
 Assigned files are copied into `sounds/`. Audio is required by default because the runtime applies fixed engine sample keys every frame. Disable `Require Audio Slots` only when intentionally exporting a visual/physics-only test package.
 
-Only assigned files are written to `config.json`; the addon does not emit references to files that are not packaged.
+Only assigned files are written to `manifest.json`; the addon does not emit references to files that are not packaged.
 
 ## Export
 
