@@ -1,4 +1,9 @@
-# VectorG Car Exporter
+# VectorG Blender Exporters
+
+This folder contains the car exporter and track exporter. Track exporter usage
+is documented in [TRACK_EXPORTER.md](TRACK_EXPORTER.md).
+
+## Car Exporter
 
 VectorG Car Exporter creates vehicle packages for the VectorG driving simulator.
 Install the `vectorg_car_exporter` folder as a Blender add-on, then open
@@ -7,7 +12,7 @@ Install the `vectorg_car_exporter` folder as a Blender add-on, then open
 The addon exports a zip with:
 
 ```text
-model.glb
+<car_id>.glb
 config.json
 sounds/
 ```
@@ -15,9 +20,18 @@ sounds/
 The package matches the game loader convention:
 
 ```text
-src/files/models/vehicles/<car_id>/model.glb
+src/files/models/vehicles/<car_id>/<car_id>.glb
 src/files/models/vehicles/<car_id>/config.json
 src/files/models/vehicles/<car_id>/sounds/
+```
+
+`config.json` identifies the exported model explicitly:
+
+```json
+{
+  "id": "<car_id>",
+  "model": "<car_id>.glb"
+}
 ```
 
 ## Scripts Path Installation

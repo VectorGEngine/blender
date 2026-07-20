@@ -4,7 +4,7 @@ bl_info = {
     "version": (0, 1, 0),
     "blender": (3, 6, 0),
     "location": "View3D > Sidebar > VectorG",
-    "description": "Export VectorG vehicle packages as model.glb + config.json + audio zip",
+    "description": "Export VectorG vehicle packages as <car_id>.glb + config.json + audio zip",
     "category": "Import-Export",
 }
 
@@ -935,6 +935,7 @@ def build_config(settings):
 
     return {
         "id": settings.car_id,
+        "model": f"{settings.car_id}.glb",
         "displayName": settings.display_name,
         "class": settings.car_class,
         "trackTypes": [
@@ -1300,8 +1301,9 @@ class CAR_EXPORTER_OT_export_car_zip(Operator, ExportHelper):
             if settings.use_custom_sounds:
                 sounds_path.mkdir()
 
+            model_filename = f"{settings.car_id}.glb"
             with_helpers_unlinked(lambda: bpy.ops.export_scene.gltf(
-                filepath=str(temp_path / "model.glb"),
+                filepath=str(temp_path / model_filename),
                 export_format="GLB",
                 use_selection=False,
                 export_apply=True,
