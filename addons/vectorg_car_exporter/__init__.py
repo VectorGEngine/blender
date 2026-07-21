@@ -532,12 +532,12 @@ class CarWheelSettings(PropertyGroup):
     radius: FloatProperty(name="Radius", default=0.3, min=0.01)
     max_brake_force: FloatProperty(name="Max Brake Force", default=5000.0, min=0.0)
     pressure: FloatProperty(name="Pressure", default=2.0, min=1.3, max=2.7)
-    camber: FloatProperty(name="Camber", default=-2.0)
-    toe: FloatProperty(name="Toe", default=0.35)
+    camber: FloatProperty(name="Camber", default=-4.0)
+    toe: FloatProperty(name="Toe", default=-0.15)
     side_friction_stiffness: FloatProperty(name="Side Friction", default=1.0)
     side_factor: FloatProperty(name="Side Factor", default=1.0)
     forward_factor: FloatProperty(name="Forward Factor", default=1.6)
-    brake_factor: FloatProperty(name="Brake Factor", default=1.0)
+    brake_factor: FloatProperty(name="Brake Factor", default=1.5)
     contact_damping: FloatProperty(name="Contact Damping", default=0.15)
 
 
@@ -553,12 +553,12 @@ class CarExporterSettings(PropertyGroup):
     steering_wheel_object: PointerProperty(name="Steering Wheel", type=bpy.types.Object)
     steering_wheel_spin_axis: EnumProperty(name="Steering Wheel Spin Axis", items=AXIS_ITEMS, default="y")
     down_force: FloatProperty(name="Downforce", default=3000.0)
-    air_drag: FloatProperty(name="Air Drag", default=1.0, min=0.0, max=1.0)
+    air_drag: FloatProperty(name="Air Drag", default=0.5, min=0.0, max=1.0)
     anti_roll: FloatProperty(name="Anti-roll", default=0.4)
     abs: FloatProperty(name="ABS", default=1.0, min=0.0, max=1.0)
     esc: FloatProperty(name="ESC", default=0.0, min=0.0, max=1.0)
     traction_control: FloatProperty(name="Traction Control", default=1.0, min=0.0, max=1.0)
-    max_steering_angle: FloatProperty(name="Max Steering Angle", default=65.0, min=1.0, max=90.0)
+    max_steering_angle: FloatProperty(name="Max Steering Angle", default=50.0, min=1.0, max=90.0)
     use_custom_sounds: BoolProperty(name="Use Custom Sounds", default=False)
     colliders: CollectionProperty(type=CarColliderSettings)
     wheels: CollectionProperty(type=CarWheelSettings)
@@ -579,7 +579,7 @@ class CarExporterSettings(PropertyGroup):
     turbo_enabled: BoolProperty(name="Turbo Enabled", default=True)
     turbo_boost: FloatProperty(name="Turbo Boost", default=1.35, min=1.0)
     turbo_valve: BoolProperty(name="Turbo Valve", default=False)
-    max_torque: FloatProperty(name="Max Torque", default=600.0, min=1.0)
+    max_torque: FloatProperty(name="Max Torque", default=590.0, min=1.0)
 
     reverse_ratio: FloatProperty(name="Reverse", default=-3.57)
     forward_gear_count: IntProperty(name="Forward Gears", default=6, min=1, max=15)
@@ -599,23 +599,23 @@ class CarExporterSettings(PropertyGroup):
     gear_14: FloatProperty(name="Gear 14", default=0.30)
     gear_15: FloatProperty(name="Gear 15", default=0.28)
 
-    torque_1000: FloatProperty(name="1000 RPM", default=400.0)
-    torque_2000: FloatProperty(name="2000 RPM", default=500.0)
-    torque_3000: FloatProperty(name="3000 RPM", default=550.0)
-    torque_4000: FloatProperty(name="4000 RPM", default=580.0)
-    torque_5000: FloatProperty(name="5000 RPM", default=590.0)
-    torque_6000: FloatProperty(name="6000 RPM", default=580.0)
-    torque_7000: FloatProperty(name="7000 RPM", default=570.0)
-    torque_8000: FloatProperty(name="8000 RPM", default=500.0)
+    torque_1000: FloatProperty(name="1000 RPM", default=422)
+    torque_2000: FloatProperty(name="2000 RPM", default=506)
+    torque_3000: FloatProperty(name="3000 RPM", default=565)
+    torque_4000: FloatProperty(name="4000 RPM", default=590)
+    torque_5000: FloatProperty(name="5000 RPM", default=586)
+    torque_6000: FloatProperty(name="6000 RPM", default=564)
+    torque_7000: FloatProperty(name="7000 RPM", default=523)
+    torque_8000: FloatProperty(name="8000 RPM", default=460)
 
     chase_camera_object: PointerProperty(name="Chase", type=bpy.types.Object, poll=camera_object_poll, update=update_chase_camera_object)
     cockpit_camera_object: PointerProperty(name="Cockpit", type=bpy.types.Object, poll=camera_object_poll, update=update_cockpit_camera_object)
     hood_camera_object: PointerProperty(name="Hood", type=bpy.types.Object, poll=camera_object_poll, update=update_hood_camera_object)
     roof_camera_object: PointerProperty(name="Roof", type=bpy.types.Object, poll=camera_object_poll, update=update_roof_camera_object)
-    chase_fov: FloatProperty(name="Chase FOV", default=70.0)
-    cockpit_fov: FloatProperty(name="Cockpit FOV", default=45.0)
-    hood_fov: FloatProperty(name="Hood FOV", default=50.0)
-    roof_fov: FloatProperty(name="Roof FOV", default=55.0)
+    chase_fov: FloatProperty(name="Chase FOV", default=65)
+    cockpit_fov: FloatProperty(name="Cockpit FOV", default=54)
+    hood_fov: FloatProperty(name="Hood FOV", default=71)
+    roof_fov: FloatProperty(name="Roof FOV", default=71)
     chase_target_distance: FloatProperty(name="Target Distance", default=5.0, min=0.01, update=update_chase_target_distance)
     cockpit_target_distance: FloatProperty(name="Target Distance", default=1.0, min=0.01, update=update_cockpit_target_distance)
     hood_target_distance: FloatProperty(name="Target Distance", default=2.0, min=0.01, update=update_hood_target_distance)
@@ -664,6 +664,9 @@ def clear_configuration_settings(settings):
     settings.max_rpm = 1
     settings.idle_rpm = 1
     settings.rev_limit = 1
+    settings.engine_inertia = 0.01
+    settings.engine_friction_torque = 0.0
+    settings.clutch_response = 0.0
     settings.turbo_enabled = False
     settings.turbo_boost = 1.0
     settings.turbo_valve = False
@@ -697,22 +700,25 @@ def initialize_configuration_settings(settings):
     settings.vehicle_tag_tarmac = True
     settings.vehicle_tag_offroad = True
     settings.down_force = 3000.0
-    settings.air_drag = 1.0
+    settings.air_drag = 0.5
     settings.anti_roll = 0.4
     settings.abs = 1.0
     settings.esc = 0.0
     settings.traction_control = 1.0
-    settings.max_steering_angle = 65.0
+    settings.max_steering_angle = 50.0
     settings.drive = "awd"
     settings.hp = 590.0
     settings.diff_ratio = 5.0
     settings.max_rpm = 8000
     settings.idle_rpm = 1000
     settings.rev_limit = 7900
+    settings.engine_inertia = 0.9
+    settings.engine_friction_torque = 70.0
+    settings.clutch_response = 12.0
     settings.turbo_enabled = True
     settings.turbo_boost = 1.35
     settings.turbo_valve = False
-    settings.max_torque = 600.0
+    settings.max_torque = 590.0
     settings.reverse_ratio = -3.57
     settings.forward_gear_count = 6
     for index, value in {
@@ -734,20 +740,20 @@ def initialize_configuration_settings(settings):
     }.items():
         setattr(settings, f"gear_{index}", value)
     for rpm, value in {
-        1000: 400.0,
-        2000: 500.0,
-        3000: 550.0,
-        4000: 580.0,
-        5000: 590.0,
-        6000: 580.0,
-        7000: 570.0,
-        8000: 500.0,
+        1000: 422.292,
+        2000: 506.974,
+        3000: 565.453,
+        4000: 590.0,
+        5000: 586.53,
+        6000: 564.822,
+        7000: 523.597,
+        8000: 460.2,
     }.items():
         setattr(settings, f"torque_{rpm}", value)
-    settings.chase_fov = 70.0
-    settings.cockpit_fov = 45.0
-    settings.hood_fov = 50.0
-    settings.roof_fov = 55.0
+    settings.chase_fov = 65.10000147006308
+    settings.cockpit_fov = 54.43222611864906
+    settings.hood_fov = 71.50777759085639
+    settings.roof_fov = 71.50777759085639
     settings.chase_target_distance = 5.0
     settings.cockpit_target_distance = 1.0
     settings.hood_target_distance = 2.0
@@ -815,13 +821,14 @@ def sample_torque_curve(settings):
 
 def default_torque_points():
     return [
-        (0.00, 0.55),
-        (0.18, 0.78),
-        (0.32, 0.92),
-        (0.48, 1.00),
-        (0.68, 0.98),
-        (0.84, 0.91),
-        (1.00, 0.78),
+        (0.125, 422.0 / 590.0),
+        (0.250, 506.0 / 590.0),
+        (0.375, 565.0 / 590.0),
+        (0.500, 590.0 / 590.0),
+        (0.625, 586.0 / 590.0),
+        (0.750, 564.0 / 590.0),
+        (0.875, 523.0 / 590.0),
+        (1.000, 460.0 / 590.0),
     ]
 
 
@@ -1199,6 +1206,7 @@ def ensure_default_wheels(settings):
             wheel.contact_damping = imported["contact_damping"]
             continue
 
+        front_wheel = group == "front"
         add_wheel_from_config(settings, group, key, {
             "steering": steering,
             "mount": {
@@ -1213,12 +1221,12 @@ def ensure_default_wheels(settings):
                 "radius": 0.3,
                 "maxBrakeForce": 5000,
                 "pressure": 2.0,
-                "camber": -2.0,
-                "toe": 0.35,
+                "camber": -4.0 if front_wheel else -3.0,
+                "toe": -0.15 if front_wheel else 0.2,
                 "sideFrictionStiffness": 1.0,
                 "sideFactor": 1.0,
                 "forwardFactor": 1.6,
-                "brakeFactor": 1.0,
+                "brakeFactor": 1.5,
                 "contactDamping": 0.15,
             },
         })
